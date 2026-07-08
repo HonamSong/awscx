@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "awscx"
+dynamic = ["version"]
+description = "AWS ECS exec / EC2 SSM 접속용 k9s 스타일 터미널 TUI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "louky0714", email = "louky0714@gmail.com" }]
+keywords = ["aws", "ecs", "ec2", "ssm", "exec", "tui", "textual", "devops"]
+dependencies = [
+    "boto3>=1.28",
+    "textual>=0.60",
+    "pyte>=0.8",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/HonamSong/awscx"
+Repository = "https://github.com/HonamSong/awscx"
+
+[project.scripts]
+awscx = "awscx.app:main"
+
+[tool.hatch.version]
+path = "awscx/config.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["awscx"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "awscx/",
+    "README.md",
+    "LICENSE",
+]
