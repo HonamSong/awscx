@@ -10,6 +10,7 @@ import time
 
 import pyte
 from rich.text import Text
+from textual.binding import Binding
 from textual.widget import Widget
 
 from .config import log
@@ -45,6 +46,17 @@ class TerminalPane(Widget, can_focus=True):
     """
 
     DEFAULT_CSS = "TerminalPane { height: 1fr; }"
+
+    # 하단 풋터에 '셸 세션에 들어와 있을 때만' 뜨는 안내(실제 처리는 on_key 가 함).
+    # 포커스된 위젯의 바인딩이 Footer 에 표시되는 점을 이용한 표시 전용 항목.
+    BINDINGS = [
+        Binding("f10", "noop", "나가기", show=True),
+        Binding("pageup", "noop", "스크롤▲", show=True),
+        Binding("pagedown", "noop", "스크롤▼", show=True),
+    ]
+
+    def action_noop(self):
+        """표시 전용 바인딩 (실제 키 처리는 on_key). 아무 것도 안 함."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -82,7 +94,9 @@ class TerminalPane(Widget, can_focus=True):
         log.info("term.start cmd=%s size=%dx%d widget_size=%s",
                  cmd, cols, rows, self.size)
         with self._lock:
-            self._screen = pyte.Screen(cols, rows)
+            # HistoryScreen: 위로 넘어간 출력(스크롤백)을 보관 → PageUp 으로 다시 보기.
+            # 새 출력이 오면 before_event 가 자동으로 맨 아래로 스냅한다.
+            self._screen = pyte.HistoryScreen(cols, rows, history=5000, ratio=0.5)
             self._stream = pyte.ByteStream(self._screen)
 
         # pty.fork() 대신 openpty + subprocess.Popen 사용:
@@ -259,6 +273,8 @@ class TerminalPane(Widget, can_focus=True):
                 screen = self._screen
                 rows, cols = screen.lines, screen.columns
                 cy, cx = screen.cursor.y, screen.cursor.x
+                # 스크롤백을 보고 있을 땐(HistoryScreen) 커서가 hidden → 커서 블록 숨김
+                cursor_hidden = bool(getattr(screen.cursor, "hidden", False))
                 if not self._color:
                     display = list(screen.display)   # 모노크롬(가벼움)
                     snap = None
@@ -269,11 +285,12 @@ class TerminalPane(Widget, can_focus=True):
                         for row in (screen.buffer.get(y) for y in range(rows))
                     ]
 
+            show_cursor = active and not cursor_hidden
             text = Text(no_wrap=True, overflow="crop")
             if not self._color:
                 # 모노크롬: display 문자열 + 커서만 반전 (escape 시퀀스 최소)
                 for y, line in enumerate(display):
-                    if active and y == cy and 0 <= cx <= len(line):
+                    if show_cursor and y == cy and 0 <= cx <= len(line):
                         text.append(line[:cx])
                         text.append(line[cx] if cx < len(line) else " ", style="reverse")
                         text.append(line[cx + 1:])
@@ -292,8 +309,14 @@ class TerminalPane(Widget, can_focus=True):
                         data, style = " ", ""
                     else:
                         data, style = (ch.data or " "), _pyte_style(ch)
-                    if active and y == cy and x == cx:
-                        style = (style + " reverse").strip()
+                    if show_cursor and y == cy and x == cx:
+                        # 커서 셀에 이미 배경/반전(예: vim 비주얼 선택 하이라이트)이 있으면
+                        # reverse 로 덮으면 선택이 가려진다 → 그땐 밑줄로 커서만 표시.
+                        if ch is not None and (ch.reverse or
+                                               (ch.bg and ch.bg != "default")):
+                            style = (style + " underline").strip()
+                        else:
+                            style = (style + " reverse").strip()
                     if style != run_style:
                         if run:
                             text.append("".join(run), style=run_style or "")
@@ -323,6 +346,48 @@ class TerminalPane(Widget, can_focus=True):
         self._set_winsize(rows, cols)
         self.refresh()
 
+    # ---- 스크롤백 ------------------------------------------------------
+    def _scroll(self, up, lines=None):
+        """스크롤백을 위/아래로 이동. 실제로 이동했으면 True.
+
+        lines 를 주면 그 줄 수만큼(휠용), 없으면 한 페이지(ratio 기본값, 키용).
+        HistoryScreen 이 아니거나 더 이동할 내역이 없으면 False → 호출측에서
+        해당 키를 원격(PTY)으로 전달하게 한다.
+        """
+        scr = self._screen
+        if scr is None or not hasattr(scr, "history"):
+            return False
+        with self._lock:
+            before = scr.history.position
+            saved_ratio = scr.history.ratio
+            try:
+                if lines is not None:
+                    # 휠 한 칸 = 몇 줄만: ratio 를 잠깐 작게 바꿔서 이동
+                    r = max(1, int(lines)) / float(max(scr.lines, 1))
+                    scr.history = scr.history._replace(ratio=r)
+                scr.prev_page() if up else scr.next_page()
+            except Exception:
+                log.exception("scroll 오류")
+                return False
+            finally:
+                if lines is not None:
+                    scr.history = scr.history._replace(ratio=saved_ratio)
+            moved = scr.history.position != before
+            if moved:
+                self._dirty = True
+        if moved:
+            self.refresh()
+        return moved
+
+    def on_mouse_scroll_up(self, event):
+        # config mouse=True 일 때만 도착(기본 False 면 발생 안 함) — 있으면 스크롤백.
+        if self.active and self._scroll(up=True, lines=3):
+            event.stop()
+
+    def on_mouse_scroll_down(self, event):
+        if self.active and self._scroll(up=False, lines=3):
+            event.stop()
+
     def on_key(self, event):
         if not self.active or self._fd is None:
             return
@@ -334,6 +399,32 @@ class TerminalPane(Widget, can_focus=True):
             event.stop()
             event.prevent_default()
             self.stop()
+            return
+
+        # 스크롤백(위로 넘어간 출력 다시 보기)
+        #  - Shift/Ctrl+PageUp/Down : 무조건 로컬 스크롤(원격에 전달 안 함)
+        #  - PageUp/Down            : 스크롤백이 있으면 로컬, 없으면 원격(vim/less)로 전달
+        if key in ("shift+pageup", "ctrl+pageup"):
+            event.stop(); event.prevent_default()
+            self._scroll(up=True)
+            return
+        if key in ("shift+pagedown", "ctrl+pagedown"):
+            event.stop(); event.prevent_default()
+            self._scroll(up=False)
+            return
+        if key == "pageup":
+            # 이미 스크롤백을 보는 중이면(position<size) 맨 위에 도달해도 소비만 한다.
+            # (원격으로 전달하면 그 응답 feed 로 화면이 맨 아래로 스냅되어 버림)
+            scr = self._screen
+            scrolled = (hasattr(scr, "history") and
+                        scr.history.position < scr.history.size)
+            moved = self._scroll(up=True)
+            if moved or scrolled:
+                event.stop(); event.prevent_default()
+                return
+            # 라이브 최하단 + 스크롤백 없음 → vim/less 등 원격 앱으로 전달
+        if key == "pagedown" and self._scroll(up=False):
+            event.stop(); event.prevent_default()
             return
 
         data = _KEY_SEQ.get(key)

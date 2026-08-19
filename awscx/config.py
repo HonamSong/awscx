@@ -3,8 +3,7 @@ import json
 import logging
 import os
 
-
-__version__ = "0.1.0"
+from ._version import __version__, version_label  # 단일 버전 소스 (awscx/_version.py)
 
 
 DEFAULT_REGION = "ap-northeast-2"
@@ -32,6 +31,9 @@ DEFAULT_CONFIG = {
     "tail_interval_sec": 3,
     "list_rows": 15,
     "terminal_color": True,
+    # 기본 OFF: 터미널 네이티브 드래그 선택/복사가 그대로 되게(k9s 유사).
+    # 켜면 앱 내 마우스 클릭 가능하지만 텍스트 선택 시 Option+드래그 필요.
+    "mouse": False,
 }
 
 

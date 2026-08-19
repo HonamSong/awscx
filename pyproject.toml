@@ -40,7 +40,7 @@ Repository = "https://github.com/HonamSong/awscx"
 awscx = "awscx.app:main"
 
 [tool.hatch.version]
-path = "awscx/config.py"
+path = "awscx/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["awscx"]

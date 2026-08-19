@@ -20,7 +20,7 @@ from textual.worker import get_current_worker
 from textual import work
 
 from .config import (
-    __version__, DEFAULT_REGION, DEFAULT_COMMAND, CONFIG_PATH, DEFAULT_CONFIG,
+    __version__, version_label, DEFAULT_REGION, DEFAULT_COMMAND, CONFIG_PATH, DEFAULT_CONFIG,
     OUTPUT_PLACEHOLDER, PROFILE_PLACEHOLDER, MODE_PLACEHOLDER, EC2_PLACEHOLDER,
     log, load_config, save_config, setup_logging,
 )
@@ -75,7 +75,6 @@ class AwsExecApp(App):
         Binding("p", "profiles", "프로파일", show=True),
         Binding("g", "config", "설정", show=True),
         Binding("escape,backspace", "back", "뒤로", show=True),
-        Binding("f10", "term_detach", "shell나가기", show=False),
         Binding("slash", "filter", "필터", show=True),
         Binding("r", "refresh", "새로고침", show=True),
         Binding("c", "copy", "복사", show=True),
@@ -131,7 +130,7 @@ class AwsExecApp(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="topbar"):
             yield Static(id="breadcrumb")
-            yield Static(f"awscx v{__version__}", id="version")
+            yield Static(f"awscx {version_label()}", id="version")
         yield Input(placeholder="필터... (Esc 로 닫기)", id="filter")
         with Horizontal(id="body"):
             yield DataTable(cursor_type="row", zebra_stripes=True, id="list")
@@ -502,6 +501,9 @@ class AwsExecApp(App):
         {"key": "tail_interval_sec", "label": "로그 tail 주기(초)", "type": "int"},
         {"key": "list_rows", "label": "목록에 보이는 줄 수", "type": "int"},
         {"key": "terminal_color", "label": "터미널 컬러 렌더링", "type": "bool"},
+        {"key": "mouse",
+         "label": "마우스 사용 (켜면 휠 스크롤/클릭·선택은 Option+드래그 / 끄면 네이티브 드래그 선택·휠은 PageUp키 / 재시작 필요)",
+         "type": "bool"},
     ]
 
     def action_config(self):
@@ -595,6 +597,9 @@ class AwsExecApp(App):
         if key == "terminal_color":
             self.query_one("#terminal", TerminalPane)._color = bool(
                 self.config.get("terminal_color", True))
+        if key == "mouse":
+            self.set_status("'mouse' 저장됨 · 재시작 후 적용됩니다")
+            return
         self.set_status(f"'{key}' 저장됨 → {CONFIG_PATH}")
 
     # ---- EC2 (SSM) 목록 ------------------------------------------------
@@ -665,7 +670,7 @@ class AwsExecApp(App):
             "--region", self.region,
         ]
         title = f"SSM  {instance['id']}" + (
-            f"  ({instance['name']})" if instance.get("name") else "") + "  (F10=나가기)"
+            f"  ({instance['name']})" if instance.get("name") else "")
         self._run_in_terminal(cmd, title)
 
     # ---- task / container 선택 화면 -----------------------------------
@@ -940,13 +945,13 @@ class AwsExecApp(App):
 
     # ---- 뒤로 / 새로고침 / 이동 ---------------------------------------
     def action_back(self):
-        # 셸 터미널이 떠 있으면 종료하고 목록으로 (Ctrl+B 와 동일)
-        term = self.query_one("#terminal", TerminalPane)
-        if term.has_class("visible"):
-            term.stop()
-            return
         if self.query_one("#filter").has_class("visible"):
             self._close_filter()
+            return
+        # 임베드 터미널 세션이 떠 있으면 먼저 종료(_on_term_exit 로 복원)
+        term = self.query_one("#terminal", TerminalPane)
+        if term.active:
+            term.stop()
             return
         # 오른쪽 결과(로그/상태/taskdef)가 떠 있으면 먼저 그것을 닫는다
         if self.output_active:
@@ -1456,43 +1461,43 @@ class AwsExecApp(App):
             "--interactive",
             "--command", self.command,
         ]
-        title = f"shell  {self.cluster['clusterName']}/{container_name}  (F10=나가기)"
+        title = f"shell  {self.cluster['clusterName']}/{container_name}"
         self._run_in_terminal(cmd, title)
 
     def _run_in_terminal(self, cmd, title):
-        """오른쪽 콘솔을 임베드 터미널로 전환하고 cmd 를 대화형 실행."""
-        log.info("run_in_terminal cmd=%s", cmd)
+        """창(우측 패널) 안의 임베드 터미널에 명령을 띄운다(화면 안 나감).
+
+        오른쪽 결과 콘솔을 숨기고 임베드 터미널(pyte)로 세션을 표시한다.
+        세션 종료(원격 exit/Ctrl+D 또는 F10) 시 _on_term_exit 로 복귀한다.
+        """
+        log.info("run_in_terminal(embed) cmd=%s", cmd)
         self._stop_follow()
         term = self.query_one("#terminal", TerminalPane)
-        self.query_one("#output-scroll").add_class("hidden")
+        self.query_one("#output-scroll", VerticalScroll).add_class("hidden")
         term.add_class("visible")
-        self.query_one("#output-title", Static).update(title)
-        self.set_status("접속 중... (F10 으로 나가기, Ctrl+B 도 가능)")
-        # 레이아웃이 반영되어 위젯 크기가 정해진 뒤 시작
-        self.call_after_refresh(lambda: term.start(cmd, on_exit=self._on_term_exit))
-
-    def action_term_detach(self):
-        # 포커스가 터미널에 없을 때도 F10 으로 셸을 나갈 수 있게 (앱 레벨 fallback)
-        term = self.query_one("#terminal", TerminalPane)
-        if term.has_class("visible") and term.active:
-            term.stop()
+        self.query_one("#output-title", Static).update(
+            _escape(f"{title}   (F10 나가기 · PgUp/PgDn 스크롤)"))
+        self.output_active = False
+        term.start(cmd, on_exit=self._on_term_exit)
 
     def _on_term_exit(self):
+        """임베드 터미널 세션 종료 → 결과 콘솔 복원, 목록으로 포커스."""
         term = self.query_one("#terminal", TerminalPane)
         dur = term.session_duration
-        out = term.last_output
-        log.info("_on_term_exit dur=%.1fs -> 목록 복귀", dur)
+        out = (term.last_output or "").strip()
         term.remove_class("visible")
-        self.query_one("#output-scroll").remove_class("hidden")
-        self.query_one(DataTable).focus()
-        # 세션이 즉시 끝났으면(대개 실패) 그 출력을 콘솔에 남겨 원인을 보여준다
-        if dur < 3.0 and out.strip():
-            self.show_output("세션 즉시 종료 (실패로 추정)", out.strip())
-            self.set_status("세션이 즉시 종료됨 · 오른쪽에서 원인 확인 · Esc 닫기")
+        self.query_one("#output-scroll", VerticalScroll).remove_class("hidden")
+        self.query_one("#output-title", Static).update("실행 결과")
+        # 세션이 너무 빨리 끝났으면(대개 접속 실패) 마지막 출력을 결과창에 보여준다
+        if dur < 3.0 and out:
+            # #output 은 markup=False → 원문 그대로 전달(escape 시 백슬래시 노출)
+            self.show_output("세션 종료 (조기 종료 - 출력 확인)", out)
         else:
-            # 결과 패널 제목/내용을 현재 레벨 안내문으로 초기화 ("SSM i-.." 잔상 제거)
-            self.clear_output()
             self.set_status("세션 종료")
+        try:
+            self.query_one(DataTable).focus()
+        except Exception:
+            pass
 
 
 def main(argv=None):
@@ -1523,7 +1528,7 @@ def main(argv=None):
     parser.add_argument("--command", "-c", default=None, metavar="CMD",
                         help="shell 접속 시 실행할 command (미지정 시 config 값)")
     parser.add_argument("--version", "-v", action="version",
-                        version=f"awscx {__version__}")
+                        version=f"awscx {version_label()}")
     args = parser.parse_args(argv)
 
     if not shutil.which("aws"):
@@ -1539,7 +1544,7 @@ def main(argv=None):
     setup_logging(cfg)
     print(f"[config] {CONFIG_PATH}")
     try:
-        AwsExecApp(args.profile, cfg).run()
+        AwsExecApp(args.profile, cfg).run(mouse=bool(cfg.get("mouse", True)))
     except Exception:
         log.exception("앱 최상위 예외")
         raise

@@ -1,6 +1,6 @@
 # awscx
 
-![version](https://img.shields.io/badge/version-0.1.0-blue.svg)
+![version](https://img.shields.io/badge/version-0.2.2-blue.svg)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
