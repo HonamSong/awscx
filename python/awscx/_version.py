@@ -5,8 +5,8 @@
                 릴리스/빌드해서 PyPI 올릴 땐 False → 화면에 'v0.2.0'.
   (PyPI 업로드 버전은 DEV 와 무관하게 항상 __version__ 그대로 = 0.2.0)
 """
-__version__ = "0.2.2"
-DEV = False
+__version__ = "0.2.3"
+DEV = True
 
 
 def version_label():

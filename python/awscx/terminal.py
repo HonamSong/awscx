@@ -74,6 +74,7 @@ class TerminalPane(Widget, can_focus=True):
         self._started = 0.0
         self._last_output = ""
         self._color = True   # 컬러 렌더링 여부(config 로 제어)
+        self._start_retries = 0
 
     @property
     def active(self):
@@ -81,6 +82,17 @@ class TerminalPane(Widget, can_focus=True):
 
     # ---- 시작/종료 -----------------------------------------------------
     def start(self, cmd, on_exit=None):
+        # 위젯이 아직 레이아웃되지 않아 크기가 0/미소면(=display 전환 직후) winsize 가
+        # 잘못 잡혀 프롬프트가 화면 밖으로 숨는다. 크기가 확정될 때까지 재시도.
+        if self.size.width <= 1 or self.size.height <= 1:
+            if self._start_retries < 20:
+                self._start_retries += 1
+                log.debug("term.start 지연(size=%s) 재시도 %d",
+                          self.size, self._start_retries)
+                self.call_after_refresh(lambda: self.start(cmd, on_exit))
+                return
+            log.warning("term.start: 크기 확정 실패, 최소값으로 진행 size=%s", self.size)
+        self._start_retries = 0
         self.stop(silent=True)  # 혹시 이전 세션이 남아있으면 정리
         self._done = False
         self._read_ended = False
@@ -91,8 +103,20 @@ class TerminalPane(Widget, can_focus=True):
 
         cols = max(self.size.width, 20)
         rows = max(self.size.height, 5)
-        log.info("term.start cmd=%s size=%dx%d widget_size=%s",
-                 cmd, cols, rows, self.size)
+        # 진단: Textual 화면크기 vs 실제 tty 크기 vs 환경변수 — 불일치 시 프롬프트 잘림 원인.
+        try:
+            app_size = self.app.size
+        except Exception:
+            app_size = "?"
+        try:
+            real_tty = os.get_terminal_size(1)  # stdout 의 실제 tty 크기(ioctl)
+            real_tty = f"{real_tty.columns}x{real_tty.lines}"
+        except Exception as e:
+            real_tty = f"err({e})"
+        log.info("term.start cmd=%s widget=%s app=%s real_tty=%s "
+                 "env(COLUMNS=%s,LINES=%s) → screen=%dx%d",
+                 cmd, self.size, app_size, real_tty,
+                 os.environ.get("COLUMNS"), os.environ.get("LINES"), cols, rows)
         with self._lock:
             # HistoryScreen: 위로 넘어간 출력(스크롤백)을 보관 → PageUp 으로 다시 보기.
             # 새 출력이 오면 before_event 가 자동으로 맨 아래로 스냅한다.
@@ -219,6 +243,13 @@ class TerminalPane(Widget, can_focus=True):
 
     def _pump(self):
         # 메인 스레드: 갱신된 화면을 그리고, 자식 종료(EOF 또는 프로세스 exit)를 감지해 복귀.
+        # 위젯 박스와 pyte 화면 크기가 어긋나면(리사이즈 이벤트 누락 등) 재동기화.
+        # → winsize 가 실제 보이는 영역과 항상 일치해 프롬프트가 화면 밖으로 잘리지 않음.
+        if self._screen is not None and self.size.height > 1 and self.size.width > 1:
+            rows = max(self.size.height, 5)
+            cols = max(self.size.width, 20)
+            if self._screen.lines != rows or self._screen.columns != cols:
+                self._resize_to(rows, cols)
         if self._dirty:
             self._dirty = False
             self.refresh()
@@ -333,18 +364,25 @@ class TerminalPane(Widget, can_focus=True):
             return Text("(render 오류)")
 
     # ---- 이벤트 --------------------------------------------------------
-    def on_resize(self, event):
-        if not self.active or self._screen is None:
-            return
-        cols = max(self.size.width, 20)
-        rows = max(self.size.height, 5)
+    def _resize_to(self, rows, cols):
+        """pyte 화면과 자식 winsize 를 rows×cols 로 맞춘다."""
         with self._lock:
+            if self._screen is None:
+                return
+            if self._screen.lines == rows and self._screen.columns == cols:
+                return
             try:
                 self._screen.resize(rows, cols)
             except Exception:
-                pass
+                log.exception("screen.resize 오류")
+        log.info("term.resize -> %dx%d", cols, rows)
         self._set_winsize(rows, cols)
         self.refresh()
+
+    def on_resize(self, event):
+        if not self.active or self._screen is None:
+            return
+        self._resize_to(max(self.size.height, 5), max(self.size.width, 20))
 
     # ---- 스크롤백 ------------------------------------------------------
     def _scroll(self, up, lines=None):

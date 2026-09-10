@@ -1,6 +1,6 @@
 # awscx
 
-![version](https://img.shields.io/badge/version-0.2.2-blue.svg)
+![version](https://img.shields.io/badge/version-0.2.3-blue.svg)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)
@@ -20,11 +20,22 @@ AWS **ECS exec** / **EC2 SSM** 접속을 위한 k9s 스타일 터미널 TUI.
   - `s` 컨테이너 shell 접속(임베드 터미널, 컬러 렌더)
   - `l` 로그 보기 → `/` 검색, `f` tail(follow), 로그레벨 색상
   - `t` task definition(JSON)
-  - 서비스에 커서를 두면 아래에 실시간 모니터 자동 표시
+  - 목록에서 index 번호 키를 누르면 해당 행으로 커서 이동
+  - 서비스에 커서를 두면 우측에 실시간 모니터 자동 표시
 - EC2
   - running 인스턴스 목록(SSM online 여부 표시) → `Enter` SSM 세션 접속
-- 임베드 터미널: `F10` 으로 나가기, 붙여넣기 지원
+- 임베드 터미널(창 안에서 실행): `F10` 나가기, 붙여넣기 지원
+  - 셸 출력 스크롤백: `PageUp` / `PageDown` (강제: `Shift`/`Ctrl`+`PageUp`/`PageDown`)
+  - 마우스 휠 스크롤은 설정에서 `mouse` 를 켜면 사용 가능(끄면 터미널 네이티브
+    드래그 선택/복사가 그대로 동작)
 - `g` 설정 화면(config 파일 편집), `c` 결과 클립보드 복사
+
+## 저장소 구조
+
+이 저장소는 모노레포입니다.
+
+- python/ — 현재 배포 중인 Python(Textual) 구현
+- go/ — Go 포팅 (예정, 폐쇄망 등 단일 바이너리 배포용)
 
 ## 요구사항 (pip 외 시스템 도구)
 
@@ -49,9 +60,11 @@ awscx -p my-profile -r us-east-1
 python -m awscx
 ```
 
-주요 키: `Enter` 상태 · `s` 접속 · `l` 로그 · `f` tail · `t` taskdef · `m`(자동)
-모니터 · `p` 프로파일 · `g` 설정 · `c` 복사 · `/` 필터 · `Ctrl+U/D` 결과 스크롤 ·
-`F10` 세션 나가기 · `q` 종료
+주요 키: `Enter` 상태 · `s` 접속 · `l` 로그 · `f` tail · `t` taskdef · 모니터(자동
+표시) · `p` 프로파일 · `g` 설정 · `c` 복사 · `/` 필터 · `Ctrl+U/D` 결과 스크롤 ·
+`q` 종료
+
+셸 세션 안에서: `PageUp`/`PageDown` 스크롤 · `F10` 세션 나가기
 
 ## 설정 파일
 

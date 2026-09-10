@@ -49,6 +49,7 @@ class AwsExecApp(App):
     #status { dock: bottom; height: 1; color: $text-muted; padding: 0 1; }
 
     #body { height: 16; }
+    #body.hidden { display: none; }
     #list { width: 1fr; }
     DataTable { height: 1fr; }
     #monitor {
@@ -1467,26 +1468,33 @@ class AwsExecApp(App):
     def _run_in_terminal(self, cmd, title):
         """창(우측 패널) 안의 임베드 터미널에 명령을 띄운다(화면 안 나감).
 
-        오른쪽 결과 콘솔을 숨기고 임베드 터미널(pyte)로 세션을 표시한다.
-        세션 종료(원격 exit/Ctrl+D 또는 F10) 시 _on_term_exit 로 복귀한다.
+        세션 종료(원격 exit/Ctrl+D 또는 F10) 시 _on_term_exit 로 목록에 복귀한다.
+        (suspend 방식은 resume 중 앱이 통째로 종료되는 문제가 있어 embed 로 유지)
         """
         log.info("run_in_terminal(embed) cmd=%s", cmd)
         self._stop_follow()
+        self._stop_monitor()
         term = self.query_one("#terminal", TerminalPane)
         self.query_one("#output-scroll", VerticalScroll).add_class("hidden")
+        # 셸 세션 동안 상단 목록/모니터를 감춰 터미널이 화면 전체 높이를 쓰게 한다.
+        # (안 그러면 winsize 가 보이는 영역보다 커져 프롬프트가 화면 아래로 숨음)
+        self.query_one("#body").add_class("hidden")
         term.add_class("visible")
         self.query_one("#output-title", Static).update(
             _escape(f"{title}   (F10 나가기 · PgUp/PgDn 스크롤)"))
         self.output_active = False
-        term.start(cmd, on_exit=self._on_term_exit)
+        # 레이아웃(숨김/펼침)이 반영된 뒤 정확한 크기로 시작 → widget_size 가 0x0 이
+        # 아니라 실제 보이는 영역이 되어 winsize 가 일치, 프롬프트가 정상 표시된다.
+        self.call_after_refresh(lambda: term.start(cmd, on_exit=self._on_term_exit))
 
     def _on_term_exit(self):
-        """임베드 터미널 세션 종료 → 결과 콘솔 복원, 목록으로 포커스."""
+        """임베드 터미널 세션 종료 → 결과 콘솔/목록 복원, 목록으로 포커스."""
         term = self.query_one("#terminal", TerminalPane)
         dur = term.session_duration
         out = (term.last_output or "").strip()
         term.remove_class("visible")
         self.query_one("#output-scroll", VerticalScroll).remove_class("hidden")
+        self.query_one("#body").remove_class("hidden")  # 상단 목록/모니터 복원
         self.query_one("#output-title", Static).update("실행 결과")
         # 세션이 너무 빨리 끝났으면(대개 접속 실패) 마지막 출력을 결과창에 보여준다
         if dur < 3.0 and out:
@@ -1542,6 +1550,13 @@ def main(argv=None):
     if args.command:
         cfg["command"] = args.command
     setup_logging(cfg)
+    # LINES/COLUMNS 가 셸에 export 되어 있으면 shutil.get_terminal_size() 가 실제 창
+    # 크기 대신 그 값을 써서(Textual 이 이를 사용) 화면이 실제보다 크게 잡히고,
+    # 임베드 셸의 프롬프트가 물리 화면 밖으로 밀려 잘린다. 이 프로세스에서만 제거해
+    # 실제 tty 크기(ioctl)를 쓰게 한다(사용자 셸엔 영향 없음).
+    removed = {k: os.environ.pop(k) for k in ("LINES", "COLUMNS") if k in os.environ}
+    if removed:
+        log.info("환경변수 무시(실제 tty 크기 사용): %s", removed)
     print(f"[config] {CONFIG_PATH}")
     try:
         AwsExecApp(args.profile, cfg).run(mouse=bool(cfg.get("mouse", True)))
